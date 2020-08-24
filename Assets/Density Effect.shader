@@ -9,12 +9,19 @@ Shader "Density Effect"
    Properties
    {
       _MainTex ("Source", 2D) = "white" {}
+      _NoiseTex ("Noise Tex", 2D) = "white" {}
       _NumPoints("Number of points", int) = 5
       _DensityScale("Density", Range(0, 10)) = 1
       _DepthScale("Depth Scale", float) = 1
       _Color("Color", Color) = (1,1,1,1)
       _Power("Light Power", Range(0, 10)) = 1
       _KValue("K Value", Range(-10, 10)) = 1
+      _RedFalloff("Red Falloff", Range(0, 100)) = 1
+      _GreenFalloff("Green Falloff", Range(0, 100)) = 1
+      _BlueFalloff("Blue Falloff", Range(0, 100)) = 1
+      _NoiseAmount("Noise Amount", Range(0, 1)) = 0.1
+      _NoiseSpeed("Noise Speed", Range(0, 100)) = 1
+      _NoiseScale("Noise Scale", Range(0, 100)) = 1
    }
    SubShader
    {
@@ -62,7 +69,7 @@ Shader "Density Effect"
             return o;
          }
 			
-         sampler2D _MainTex;
+         sampler2D _MainTex, _NoiseTex;
          sampler2D _CameraDepthTexture;
          float4 _MainTex_ST;
          int _NumPoints;
@@ -71,6 +78,16 @@ Shader "Density Effect"
          float4 _Color;
          float _Power;
          float _KValue;
+         float _RedFalloff, _GreenFalloff, _BlueFalloff;
+         float _NoiseAmount, _NoiseSpeed, _NoiseScale;
+
+        float4 colorFalloff(float depth){
+            depth = max(depth, 0);
+            float r = exp(-depth / _RedFalloff);
+            float g = exp(-depth / _GreenFalloff);
+            float b = exp(-depth / _BlueFalloff);
+            return float4(r, g, b, 1);
+		}
 
         float smoothMin(float a, float b, float k){
             float h = clamp(0.5f + 0.5f * (b-a) / k, 0.0, 1.0);
@@ -81,7 +98,7 @@ Shader "Density Effect"
             return smoothMin(a, b, -k);  
 		}
 
-         float sampleLightAtPoint(float3 worldPos)
+        float sampleLightAtPoint(float3 worldPos)
         {
 		    float seaDepth = max(-worldPos.y, 0);
 		
@@ -103,6 +120,41 @@ Shader "Density Effect"
 	        }
 	        return total;
         }
+
+        float4 sampleColorAtPoint(float3 worldPos){
+		    float seaDepth = max(-worldPos.y, 0);
+            float4 sunColor = colorFalloff(seaDepth * _DepthScale);
+
+            float4 lightsColor = 0;
+            for (int i = 0; i < 8; i++)
+	        {
+		        float4 lightPos = lightPositions[i];
+		        lightPos = mul(UNITY_MATRIX_IT_MV, lightPos);
+		        lightPos = mul(unity_ObjectToWorld, lightPos);
+
+		        float proximity = 1 - saturate(length(lightPos.xyz - worldPos) / lightProps[i].x);
+                proximity = pow(proximity, _Power);
+		        if (lightPositions[i].w > 0){
+                    float l = proximity * lightColors[i].x;
+                    lightsColor  = smoothMax(lightsColor, l, _KValue);
+				}
+	        }
+
+            return sunColor + float4(lightsColor);
+		}
+
+        float4 getRayColor(float3 rayOrigin, float3 rayDirection, int numPoints, float rayLength, float densityScale, float depthScale){
+              float3 p = rayOrigin;
+              float stepSize = rayLength / (numPoints - 1);
+              float4 totalLight = 0;
+
+              for (int i = 0; i < numPoints; i++){
+                totalLight += sampleColorAtPoint(p) * colorFalloff(i * stepSize) * stepSize * densityScale;
+
+                p += rayDirection * stepSize;
+			  }
+              return totalLight / (numPoints - 1);
+		}
         
         float2 densityRay(float3 rayOrigin, float3 rayDirection, int numPoints, float depthValue, float densityScale, float depthScale, float3 sunDirection)
         {
@@ -111,7 +163,7 @@ Shader "Density Effect"
 	        float totalLight = 0;
 	        float totalDensity = 0;
 	
-	        for (int i = 0; i < numPoints; i++)
+	        for (int i = 0; i < numPoints - 1; i++)
 	        {
 		
 		        totalDensity += densityScale * stepSize;
@@ -138,9 +190,16 @@ Shader "Density Effect"
             float depth = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.uv.xy);
 			depth = LinearEyeDepth(depth);
 
-
             float3 worldPos = i.worldDir * depth + _WorldSpaceCameraPos;
             float3 worldDir = normalize(i.worldDir);
+
+            float seaDepth = max(0, -worldPos.y);
+
+            float4 resultColor = colorFalloff(depth) * colorFalloff(seaDepth) * color + getRayColor(_WorldSpaceCameraPos, worldDir, _NumPoints, depth, _DensityScale, _DepthScale);
+            float noiseVal = tex2D(_NoiseTex, uv * _NoiseScale + _NoiseSpeed * _Time);
+            noiseVal = (2 * noiseVal) - 1;
+
+            return resultColor + noiseVal * _NoiseAmount;
 
             float2 lightResult = densityRay(_WorldSpaceCameraPos, worldDir, _NumPoints, depth, _DensityScale, _DepthScale, _WorldSpaceLightPos0.xyz);
             float4 waterColor = _Color * lightResult.y;
