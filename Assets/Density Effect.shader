@@ -133,56 +133,76 @@ Shader "Density Effect"
             return sunColor + float4(lightsColor);
 		}
 
-        float4 getRayColor(float3 rayOrigin, float3 rayDirection, int numPoints, float rayLength, float densityScale, float depthScale, float4 originalColor){
-              float3 p = rayOrigin;
-              float stepSize = rayLength / (numPoints - 1);
-              float4 resultColor = originalColor;
+        float4 getRayColor(float3 origin, float3 rayDirection, int numPoints, float depth, float densityScale, float depthScale, float4 originalColor){
+                
+            float rayLength = depth;
+            float3 rayOrigin = origin;
 
-              for (int i = 0; i < numPoints - 1; i++){
+            if (rayOrigin.y > 0 && rayDirection.y < 0){
+                //Move origin to where it intersects surface
+                float yDiff = rayOrigin.y;
+                float startT = yDiff / -rayDirection.y;
+                rayOrigin = origin + rayDirection * startT;
+			}
+
+            if (rayDirection.y > 0 && (rayOrigin + rayDirection * rayLength).y > 0){
+                //Shorten ray to where it intersects surface
+                float yDiff = -rayOrigin.y;
+                rayLength = yDiff / rayDirection.y;
+
+                rayLength = min(rayLength, _MaxDistance);
+			}
+
+            float stepSize = rayLength / (numPoints - 1);
+            float3 p = rayOrigin;
+            float4 resultColor = 0;
+
+            for (int i = 0; i < numPoints - 1; i++){
                 p += rayDirection * stepSize;
 
                 float4 sampleColor = getLightColor(p);
 
-                float t = stepSize / densityScale;
-                t = clamp(t, 0, 1);
+                resultColor += sampleColor;
+            }
+            resultColor /= (numPoints - 1);
+            resultColor.a = 1;
 
-                resultColor = lerp(resultColor, sampleColor, t);
-			  }
-              resultColor.a = 1;
-              return resultColor;
-		}
+            float t = rayLength / _MaxDistance;
 
-         float4 frag(v2f i) : COLOR
-         {
-            float2 uv = UnityStereoScreenSpaceUVAdjust(i.uv, _MainTex_ST);
-            float4 color = tex2D(_MainTex, uv);
-            /*float rawDepth = UNITY_SAMPLE_DEPTH(tex2D(_CameraDepthTexture, i.uv));
-            float depth = LinearEyeDepth(rawDepth) * _ProjectionParams.w;*/
-            float depth = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.uv.xy);
-			depth = LinearEyeDepth(depth);
+            return lerp(originalColor, resultColor, t);
+        }
 
-            float3 worldPos = i.worldDir * depth + _WorldSpaceCameraPos;
-            float3 worldDir = normalize(i.worldDir);
+        float4 frag(v2f i) : COLOR
+        {
+        float2 uv = UnityStereoScreenSpaceUVAdjust(i.uv, _MainTex_ST);
+        float4 color = tex2D(_MainTex, uv);
+        /*float rawDepth = UNITY_SAMPLE_DEPTH(tex2D(_CameraDepthTexture, i.uv));
+        float depth = LinearEyeDepth(rawDepth) * _ProjectionParams.w;*/
+        float depth = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.uv.xy);
+        depth = LinearEyeDepth(depth);
 
-            float3 nearPos = _WorldSpaceCameraPos + i.worldDir * _ProjectionParams.x;
-            if (nearPos.y > 0){
+        float3 worldPos = i.worldDir * depth + _WorldSpaceCameraPos;
+        float3 worldDir = normalize(i.worldDir);
+
+        float3 nearPos = _WorldSpaceCameraPos + i.worldDir * _ProjectionParams.x;
+        if (nearPos.y > 0){
                 
-                if (worldPos.y >= 0){
-                    return color;
-				}
-			}
+            if (worldPos.y >= 0){
+                return color;
+	        }
+        }
 
-            float4 resultColor = getRayColor(_WorldSpaceCameraPos, worldDir, _NumPoints, min(depth, _MaxDistance), _DensityScale, _DepthScale, color);
-            float noiseVal = tex2D(_NoiseTex, uv * _NoiseScale + _NoiseSpeed * _Time);
-            noiseVal = (2 * noiseVal) - 1;
+        float4 resultColor = getRayColor(_WorldSpaceCameraPos, worldDir, _NumPoints, min(depth, _MaxDistance), _DensityScale, _DepthScale, color);
+        float noiseVal = tex2D(_NoiseTex, uv * _NoiseScale + _NoiseSpeed * _Time);
+        noiseVal = (2 * noiseVal) - 1;
 
-            return resultColor + noiseVal * _NoiseAmount;
+        return resultColor + noiseVal * _NoiseAmount;
 
-            /*float2 lightResult = densityRay(_WorldSpaceCameraPos, worldDir, _NumPoints, depth  * _ProjectionParams.w, _DensityScale, _DepthScale, _WorldSpaceLightPos0.xyz);
-            float4 waterColor = _Color * lightResult.y;
+        /*float2 lightResult = densityRay(_WorldSpaceCameraPos, worldDir, _NumPoints, depth  * _ProjectionParams.w, _DensityScale, _DepthScale, _WorldSpaceLightPos0.xyz);
+        float4 waterColor = _Color * lightResult.y;
 
-            return lerp(color, waterColor, lightResult.x);*/
-         }
+        return lerp(color, waterColor, lightResult.x);*/
+        }
          ENDCG
       }
 

@@ -45,7 +45,7 @@ float4 getLightColor(float3 worldPos)
             float3 dir = _LightPositions[i].xyz;
             if (dir.y < 0)
             {
-                float seaDepth = (-worldPos.y + 5) / -dir.y;
+                float seaDepth = (-worldPos.y + 1) / -dir.y;
                 result += _LightColors[i] * colorFalloff(seaDepth);
             }
             
