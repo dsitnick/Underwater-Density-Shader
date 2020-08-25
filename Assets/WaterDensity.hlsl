@@ -1,5 +1,8 @@
-float4 test(){
-	return float4(0,1,1,1);
+
+float biasFunction(float x, float bias)
+{
+    float k = pow(1 - bias, 3);
+    return (x * k) / (x * k - x + 1);
 }
 
 uniform float _RedFalloff, _GreenFalloff, _BlueFalloff;
@@ -34,7 +37,7 @@ float4 getLightColor(float3 worldPos)
             float d = dot(v, v);
             float intensity = 1 - d / _LightProps[i].x / _LightProps[i].x;
             intensity = max(0, intensity);
-            intensity = pow(intensity, 2);
+            intensity = pow(intensity, 2) * 5;
             
             result += _LightColors[i] * intensity;
         }

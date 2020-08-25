@@ -23,6 +23,7 @@ Shader "Density Effect"
       _NoiseAmount("Noise Amount", Range(0, 1)) = 0.1
       _NoiseSpeed("Noise Speed", Range(0, 100)) = 1
       _NoiseScale("Noise Scale", Range(0, 100)) = 1
+      _Bias("Bias", Range(0, 1)) = 0
    }
    SubShader
    {
@@ -74,7 +75,7 @@ Shader "Density Effect"
          int _NumPoints;
          float _DensityScale, _DepthScale, _MaxDistance;
          float4 _Color;
-         float _Power;
+         float _Power, _Bias;
          float _KValue;
          float _NoiseAmount, _NoiseSpeed, _NoiseScale;
 
@@ -133,7 +134,7 @@ Shader "Density Effect"
             return sunColor + float4(lightsColor);
 		}
 
-        float4 getRayColor(float3 origin, float3 rayDirection, int numPoints, float depth, float densityScale, float depthScale, float4 originalColor){
+        float4 getRayColor(float3 origin, float3 rayDirection, float numPoints, float depth, float densityScale, float depthScale, float4 originalColor){
                 
             float rayLength = depth;
             float3 rayOrigin = origin;
@@ -153,23 +154,25 @@ Shader "Density Effect"
                 rayLength = min(rayLength, _MaxDistance);
 			}
 
-            float stepSize = rayLength / (numPoints - 1);
+            //float stepSize = rayLength / (numPoints - 1);
             float3 p = rayOrigin;
             float4 resultColor = 0;
 
-            for (int i = 0; i < numPoints - 1; i++){
-                p += rayDirection * stepSize;
+            for (float i = 0; i < numPoints - 1; i++){
 
                 float4 sampleColor = getLightColor(p);
 
-                resultColor += sampleColor;
+                float tDiff = biasFunction((i + 1) / (numPoints - 1), _Bias) - biasFunction(i / (numPoints - 1), _Bias);
+
+                resultColor += sampleColor * tDiff;
+                
+                p += rayDirection * tDiff * rayLength;
             }
-            resultColor /= (numPoints - 1);
-            resultColor.a = 1;
+            resultColor /= resultColor.a;
 
-            float t = rayLength / _MaxDistance;
+            float densityBlend = rayLength / _MaxDistance;
 
-            return lerp(originalColor, resultColor, t);
+            return lerp(originalColor, resultColor, densityBlend);
         }
 
         float4 frag(v2f i) : COLOR
