@@ -10,8 +10,9 @@ Shader "Density Effect"
    {
       _MainTex ("Source", 2D) = "white" {}
       _NoiseTex ("Noise Tex", 2D) = "white" {}
+      _MaxDistance("Max Distance", Range(0,1000)) = 100
       _NumPoints("Number of points", int) = 5
-      _DensityScale("Density", Range(0, 10)) = 1
+      _DensityScale("Density", float) = 1
       _DepthScale("Depth Scale", float) = 1
       _Color("Color", Color) = (1,1,1,1)
       _Power("Light Power", Range(0, 10)) = 1
@@ -29,6 +30,8 @@ Shader "Density Effect"
       ZWrite Off 
       ZTest Always
 
+      Tags { "Queue"="Overlay"}
+
       Pass
       {
          CGPROGRAM
@@ -37,6 +40,7 @@ Shader "Density Effect"
 			
          #include "UnityCG.cginc"
          #include "WaterDensity.hlsl"
+         #include "Lighting.cginc"
 
          struct appdata
          {
@@ -51,11 +55,6 @@ Shader "Density Effect"
             float3 worldDir : TEXCOORD1;
          };
 
-		float4x4 clipToWorld;
-        float4 lightPositions[8];
-        float4 lightColors[8];
-        float4 lightProps[8];
-
          v2f vert(appdata i)
          {
             v2f o;
@@ -64,7 +63,7 @@ Shader "Density Effect"
             o.uv = i.texcoord;
 
             float4 clip = float4(o.vertex.xy, 0, 1);
-            o.worldDir = mul(clipToWorld, clip) - _WorldSpaceCameraPos;
+            o.worldDir = mul(_ClipToWorld, clip) - _WorldSpaceCameraPos;
 
             return o;
          }
@@ -73,21 +72,11 @@ Shader "Density Effect"
          sampler2D _CameraDepthTexture;
          float4 _MainTex_ST;
          int _NumPoints;
-         float _DensityScale;
-         float _DepthScale;
+         float _DensityScale, _DepthScale, _MaxDistance;
          float4 _Color;
          float _Power;
          float _KValue;
-         float _RedFalloff, _GreenFalloff, _BlueFalloff;
          float _NoiseAmount, _NoiseSpeed, _NoiseScale;
-
-        float4 colorFalloff(float depth){
-            depth = max(depth, 0);
-            float r = exp(-depth / _RedFalloff);
-            float g = exp(-depth / _GreenFalloff);
-            float b = exp(-depth / _BlueFalloff);
-            return float4(r, g, b, 1);
-		}
 
         float smoothMin(float a, float b, float k){
             float h = clamp(0.5f + 0.5f * (b-a) / k, 0.0, 1.0);
@@ -107,14 +96,14 @@ Shader "Density Effect"
 	        float total = lightLevel;
 	        for (int i = 0; i < 8; i++)
 	        {
-		        float4 lightPos = lightPositions[i];
+		        float4 lightPos = _LightPositions[i];
 		        lightPos = mul(UNITY_MATRIX_IT_MV, lightPos);
 		        lightPos = mul(unity_ObjectToWorld, lightPos);
 
-		        float proximity = 1 - saturate(length(lightPos.xyz - worldPos) / lightProps[i].x);
+		        float proximity = 1 - saturate(length(lightPos.xyz - worldPos) / _LightProps[i].x);
                 proximity = pow(proximity, _Power);
-		        if (lightPositions[i].w > 0){
-                    float l = proximity * lightColors[i].x;
+		        if (_LightPositions[i].w > 0){
+                    float l = proximity * _LightColors[i].x;
                     total  = smoothMax(total, l, _KValue);
 				}
 	        }
@@ -122,10 +111,11 @@ Shader "Density Effect"
         }
 
         float4 sampleColorAtPoint(float3 worldPos){
-		    float seaDepth = max(-worldPos.y, 0);
-            float4 sunColor = colorFalloff(seaDepth * _DepthScale);
+		    float seaDepth = max(-worldPos.y, 0) + 5;
+            float4 sunColor = colorFalloff(seaDepth) * _LightColor0;
 
             float4 lightsColor = 0;
+            /*
             for (int i = 0; i < 8; i++)
 	        {
 		        float4 lightPos = lightPositions[i];
@@ -138,48 +128,29 @@ Shader "Density Effect"
                     float l = proximity * lightColors[i].x;
                     lightsColor  = smoothMax(lightsColor, l, _KValue);
 				}
-	        }
+	        }*/
 
             return sunColor + float4(lightsColor);
 		}
 
-        float4 getRayColor(float3 rayOrigin, float3 rayDirection, int numPoints, float rayLength, float densityScale, float depthScale){
+        float4 getRayColor(float3 rayOrigin, float3 rayDirection, int numPoints, float rayLength, float densityScale, float depthScale, float4 originalColor){
               float3 p = rayOrigin;
               float stepSize = rayLength / (numPoints - 1);
-              float4 totalLight = 0;
+              float4 resultColor = originalColor;
 
-              for (int i = 0; i < numPoints; i++){
-                totalLight += sampleColorAtPoint(p) * colorFalloff(i * stepSize) * stepSize * densityScale;
-
+              for (int i = 0; i < numPoints - 1; i++){
                 p += rayDirection * stepSize;
-			  }
-              return totalLight / (numPoints - 1);
-		}
-        
-        float2 densityRay(float3 rayOrigin, float3 rayDirection, int numPoints, float depthValue, float densityScale, float depthScale, float3 sunDirection)
-        {
-	        float3 p = rayOrigin;
-	        float stepSize = depthValue / (numPoints - 1);
-	        float totalLight = 0;
-	        float totalDensity = 0;
-	
-	        for (int i = 0; i < numPoints - 1; i++)
-	        {
-		
-		        totalDensity += densityScale * stepSize;
-		        totalLight += sampleLightAtPoint(p);
-		
-		        p += rayDirection * stepSize;
-	        }
-	
-	        totalLight /= numPoints;
-	
-	        totalDensity = min(totalDensity, 1);
-	        totalLight = saturate(totalLight);
-	
-	        return float2(totalDensity, totalLight);
 
-        }
+                float4 sampleColor = getLightColor(p);
+
+                float t = stepSize / densityScale;
+                t = clamp(t, 0, 1);
+
+                resultColor = lerp(resultColor, sampleColor, t);
+			  }
+              resultColor.a = 1;
+              return resultColor;
+		}
 
          float4 frag(v2f i) : COLOR
          {
@@ -193,18 +164,24 @@ Shader "Density Effect"
             float3 worldPos = i.worldDir * depth + _WorldSpaceCameraPos;
             float3 worldDir = normalize(i.worldDir);
 
-            float seaDepth = max(0, -worldPos.y);
+            float3 nearPos = _WorldSpaceCameraPos + i.worldDir * _ProjectionParams.x;
+            if (nearPos.y > 0){
+                
+                if (worldPos.y >= 0){
+                    return color;
+				}
+			}
 
-            float4 resultColor = colorFalloff(depth) * colorFalloff(seaDepth) * color + getRayColor(_WorldSpaceCameraPos, worldDir, _NumPoints, depth, _DensityScale, _DepthScale);
+            float4 resultColor = getRayColor(_WorldSpaceCameraPos, worldDir, _NumPoints, min(depth, _MaxDistance), _DensityScale, _DepthScale, color);
             float noiseVal = tex2D(_NoiseTex, uv * _NoiseScale + _NoiseSpeed * _Time);
             noiseVal = (2 * noiseVal) - 1;
 
             return resultColor + noiseVal * _NoiseAmount;
 
-            float2 lightResult = densityRay(_WorldSpaceCameraPos, worldDir, _NumPoints, depth, _DensityScale, _DepthScale, _WorldSpaceLightPos0.xyz);
+            /*float2 lightResult = densityRay(_WorldSpaceCameraPos, worldDir, _NumPoints, depth  * _ProjectionParams.w, _DensityScale, _DepthScale, _WorldSpaceLightPos0.xyz);
             float4 waterColor = _Color * lightResult.y;
 
-            return lerp(color, waterColor, lightResult.x);
+            return lerp(color, waterColor, lightResult.x);*/
          }
          ENDCG
       }
